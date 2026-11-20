@@ -1,0 +1,6 @@
+tools/layouts_raw.json
+tools/bases_raw.json
+tools/*.png
+tools/__pycache__/
+*.pdf
+.DS_Store
