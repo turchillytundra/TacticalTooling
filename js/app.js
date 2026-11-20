@@ -25,7 +25,7 @@
       players: { A: { name: 'Attacker', color: '#c8372d' }, B: { name: 'Defender', color: '#2f6fb7' } },
       rules: clone(TT.DEFAULT_RULES),
       view: {
-        labels: true, grid: true, features: true, zones: true, areaLabels: false, snap: true,
+        labels: true, grid: true, features: true, zones: true, areaLabels: false, snap: true, lockLayout: true,
         threat: { move: false, advance: false, shoot: true, charge: true, engage: false },
         threatScope: 'selected', threatBasis: 'move', stack: false,
         los: true, vis: false, visClip: false, cover: true
@@ -376,7 +376,7 @@
       out.push('<text x="' + cx + '" y="' + cy + '" font-size="' + 12 * px + '" text-anchor="middle" class="ulabel" paint-order="stroke" stroke="#000" stroke-width="' + 3 * px + '" fill="#fff" pointer-events="none">' + label + '</text>');
     });
     // zone vertex handles
-    if (UI.sel && UI.sel.kind === 'zone') {
+    if (UI.sel && UI.sel.kind === 'zone' && !S.view.lockLayout) {
       var z = zoneById(UI.sel.id);
       if (z) z.points.forEach(function (p, i) {
         out.push('<rect x="' + (p[0] - 5 * px) + '" y="' + (p[1] - 5 * px) + '" width="' + 10 * px + '" height="' + 10 * px + '" fill="#fff" stroke="#000" stroke-width="' + px + '" data-k="zv" data-id="' + z.id + '" data-vi="' + i + '"/>');
@@ -519,6 +519,7 @@
     }
     var w = screenToWorld(e.clientX, e.clientY);
     var hit = hitInfo(e.target);
+    if (S.view.lockLayout && (hit.k === 'zone' || hit.k === 'zv')) hit = { k: 'bg' };
     if (UI.tool === 'measure' && e.button !== 1) {
       var nm = nearestModel(w, 0);
       UI.measure = { a: nm ? [unitById(nm.u).models[nm.i].x, unitById(nm.u).models[nm.i].y] : w, b: w, ua: nm, ub: null };
@@ -537,10 +538,10 @@
       UI.drag = { kind: 'unit', id: u.id, mi: single ? hit.mi : null, start: start, orig: clone(u.models), moved: false };
     } else if (hit.k === 'terrain') {
       var t = terrById(hit.id); select('terrain', t.id);
-      UI.drag = { kind: 'terrain', id: t.id, start: start, orig: { x: t.x, y: t.y }, moved: false };
+      UI.drag = S.view.lockLayout ? { kind: 'pan', sx: e.clientX, sy: e.clientY, cx: UI.cam.x, cy: UI.cam.y, moved: false } : { kind: 'terrain', id: t.id, start: start, orig: { x: t.x, y: t.y }, moved: false };
     } else if (hit.k === 'obj') {
       var o = objById(hit.id); select('obj', o.id);
-      UI.drag = { kind: 'obj', id: o.id, start: start, orig: { x: o.x, y: o.y }, moved: false };
+      UI.drag = S.view.lockLayout ? { kind: 'pan', sx: e.clientX, sy: e.clientY, cx: UI.cam.x, cy: UI.cam.y, moved: false } : { kind: 'obj', id: o.id, start: start, orig: { x: o.x, y: o.y }, moved: false };
     } else if (hit.k === 'zone') {
       select('zone', hit.id);
       UI.drag = { kind: 'zone', id: hit.id, start: start, orig: clone(zoneById(hit.id).points), moved: false };
@@ -729,7 +730,7 @@
   function terrainEdges(t) { return G.bbox(G.terrainPolygon(t)); }
   function panelTerrain(el, t) {
     var f = TT.FOOTPRINTS[t.type], bb = terrainEdges(t), A = areas()[t.area] || {};
-    var h = '<h3>' + esc(f.name) + ' <span class="muted">' + f.w + '" × ' + f.h + '"</span></h3>';
+    var h = '<h3>' + esc(f.name) + ' <span class="muted">' + f.w + '" × ' + f.h + '"</span></h3>' + lockNote();
     h += '<p class="muted small">Positions in inches from the top-left corner of the battlefield. Edge fields move the piece so that edge sits at that distance.</p>';
     h += '<div class="grid2"><label>Centre X<input type="number" step="0.25" data-act="tX" value="' + fmt(t.x, 3) + '"></label><label>Centre Y<input type="number" step="0.25" data-act="tY" value="' + fmt(t.y, 3) + '"></label></div>';
     h += '<div class="grid2"><label>Left edge from left<input type="number" step="0.25" data-act="tL" value="' + fmt(bb.minX, 2) + '"></label><label>Right edge from right<input type="number" step="0.25" data-act="tR" value="' + fmt(S.board.w - bb.maxX, 2) + '"></label>' +
@@ -750,8 +751,9 @@
       set('tX', t.x); set('tY', t.y); set('tL', bb.minX); set('tR', S.board.w - bb.maxX); set('tT', bb.minY); set('tB', S.board.h - bb.maxY);
     }
   }
+  function lockNote() { return S.view.lockLayout ? '<p class="small lockbar">Layout is locked, so this can\'t be dragged. Unlock it in the <b>Layout</b> tab to move pieces (the fields below still edit it exactly).</p>' : ''; }
   function panelObj(el, o) {
-    var h = '<h3>Objective</h3><div class="grid2"><label>Type<select data-act="oKind">' +
+    var h = '<h3>Objective</h3>' + lockNote() + '<div class="grid2"><label>Type<select data-act="oKind">' +
       [['central', 'Central'], ['expansion', 'Expansion'], ['home-attacker', 'Home (Attacker)'], ['home-defender', 'Home (Defender)']].map(function (k) { return '<option value="' + k[0] + '"' + (o.kind === k[0] ? ' selected' : '') + '>' + k[1] + '</option>'; }).join('') + '</select></label>' +
       '<label>Label<input data-act="oLabel" value="' + esc(o.label || '') + '"></label>' +
       '<label>X<input type="number" step="0.25" data-act="oX" value="' + o.x + '"></label><label>Y<input type="number" step="0.25" data-act="oY" value="' + o.y + '"></label></div>';
@@ -792,6 +794,7 @@
     var opts = '<option value="blank">Blank battlefield</option><optgroup label="Event Companion v1.2 (official)">' +
       (TT.OFFICIAL_LAYOUTS || []).map(function (l) { return '<option value="off:' + l.id + '"' + (S.layout.id === l.id ? ' selected' : '') + '>' + esc(l.name) + '</option>'; }).join('') + '</optgroup>';
     if (MYLAYOUTS.length) opts += '<optgroup label="My layouts">' + MYLAYOUTS.map(function (l, i) { return '<option value="my:' + i + '">' + esc(l.name) + '</option>'; }).join('') + '</optgroup>';
+    h += '<div class="lockbar">' + chk('lockLayout', '<b>Lock layout</b> — terrain, objectives and deployment zones can\'t be moved') + '</div>';
     h += '<h4>Layout library</h4><select id="layoutSel" class="full">' + opts + '</select><div class="row wrap"><button type="button" data-act="loadLayout">Load layout</button><button type="button" data-act="rotateBoard">Rotate battlefield 90°</button></div>';
     var cur = (TT.OFFICIAL_LAYOUTS || []).find(function (l) { return l.id === S.layout.id; });
     if (cur) h += '<p class="small">' + esc(cur.dispositions[0]) + ' (' + esc(cur.missions[0]) + ') vs ' + esc(cur.dispositions[1]) + ' (' + esc(cur.missions[1]) + ') · Event Companion p.' + cur.page + '</p>';
@@ -1081,17 +1084,19 @@
     },
     rotateBoard: function () { rotateBoard(); },
     addFoot: function (el) {
+      unlockForEdit();
       var k = el.dataset.t, r = svg.getBoundingClientRect();
       var c = screenToWorld(r.left + r.width / 2, r.top + r.height / 2);
       var t = { id: uid(), type: k, x: snapv(Math.min(Math.max(c[0], 6), S.board.w - 6)), y: snapv(Math.min(Math.max(c[1], 6), S.board.h - 6)), rot: 0, mirror: false, area: nextAreaId(), dense: true, obscuring: TT.FOOTPRINTS[k].obscuring };
       S.terrain.push(t); UI.cache = {}; commit(); select('terrain', t.id);
     },
     addObj: function (el) {
+      unlockForEdit();
       var o = { id: uid(), kind: el.dataset.k, x: S.board.w / 2, y: S.board.h / 2, area: null, label: '' };
       o.area = areaAt([o.x, o.y]); S.objectives.push(o); commit(); select('obj', o.id);
     },
     applyZones: function () { applyZonePreset($('#zonePreset').value); commit(); render(); },
-    addZone: function () { var z = { id: uid(), player: 'A', points: [[0, 0], [S.board.w, 0], [S.board.w, 12], [0, 12]] }; S.zones.push(z); commit(); select('zone', z.id); },
+    addZone: function () { unlockForEdit(); var z = { id: uid(), player: 'A', points: [[0, 0], [S.board.w, 0], [S.board.w, 12], [0, 12]] }; S.zones.push(z); commit(); select('zone', z.id); },
     applyBoard: function () { var b = TT.BOARD_PRESETS.find(function (x) { return x.id === $('#boardPreset').value; }); if (b) { S.board = { w: b.w, h: b.h }; commit(); renderAll(); fit(); } },
     boardW: function (el) { S.board.w = Math.max(10, num(el.value, 44)); commit(); render(); fit(); },
     boardH: function (el) { S.board.h = Math.max(10, num(el.value, 60)); commit(); render(); fit(); },
@@ -1111,7 +1116,7 @@
     },
     clearTerrain: function () { dialog('Remove all terrain, objectives and zones?', { ok: 'Remove' }).then(function (ok) { if (!ok) return; S.terrain = []; S.objectives = []; S.features = []; S.zones = []; S.layout = { id: 'custom', name: 'Custom layout' }; UI.sel = null; UI.cache = {}; commit(); renderAll(); }); },
 
-    viewChk: function (el) { var path = el.dataset.path.split('.'), o = S.view; while (path.length > 1) o = o[path.shift()]; o[path[0]] = el.checked; commit(); render(); },
+    viewChk: function (el) { var path = el.dataset.path.split('.'), o = S.view; while (path.length > 1) o = o[path.shift()]; o[path[0]] = el.checked; if (el.dataset.path === 'lockLayout') { if (UI.sel && UI.sel.kind === 'zone') UI.sel = null; toast(el.checked ? 'Layout locked' : 'Layout unlocked — terrain, objectives and zones can be moved'); } commit(); render(); },
     viewSel: function (el) { S.view[el.dataset.path] = el.value; commit(); render(); },
     ruleSel: function (el) { S.rules[el.dataset.path] = el.value; UI.cache = {}; commit(); render(); renderPanel(); },
     ruleNum: function (el) { S.rules[el.dataset.path] = num(el.value, S.rules[el.dataset.path]); UI.cache = {}; commit(); render(); },
@@ -1133,6 +1138,7 @@
     newScenario: function () { dialog('Start a new scenario? The current one is replaced (you can undo).', { ok: 'Start new' }).then(function (ok) { if (!ok) return; S = defaultState(); UI.sel = null; UI.cache = {}; commit(); renderAll(); fit(); }); },
     libDel: function (el) { delete BASELIB[el.dataset.k]; LS.set('tt.baseLib', BASELIB); renderPanel(); }
   };
+  function unlockForEdit() { if (S.view.lockLayout) { S.view.lockLayout = false; toast('Layout unlocked for editing — re-lock it in the Layout tab'); } }
   // In-page dialog (browser confirm/prompt are blocked in some embedded viewers)
   function dialog(msg, opts) {
     opts = opts || {};

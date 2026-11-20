@@ -85,3 +85,4 @@ h4 { margin: 16px 0 6px; font-size: 12px; text-transform: uppercase; letter-spac
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 20; }
 .modal .box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; width: min(420px, 92vw); }
 .modal p { margin: 0 0 10px; }
+.lockbar { background: #2b2618; border: 1px solid #5c4a1c; border-radius: 6px; padding: 6px 8px; margin: 4px 0; }
