@@ -36,7 +36,9 @@ repository (Settings → Pages → deploy from `main` / root) and use it from an
 - **Line of sight** under the 11th edition Obscuring rule (13.10). A line crossing an obscuring terrain area is blocked, unless one of the two models is within that area.
 - **Hidden** (13.09). Infantry, Beasts and Swarm models within an area that has dense features, and that haven't shot, can only be seen within 15".
 - **Benefit of cover** (13.08) is flagged per target.
-- **Visibility shading** shows where the selected unit can see, and can be clipped to its maximum range.
+- **Firing lanes overlay**: colours the table by what a target standing there would get from the selected unit — clear shot, cover (−1 BS), hidden (Infantry in dense terrain beyond 15"), or no line of sight — from its current position or after moving.
+- **Danger map overlay**: how many enemy units could see and reach the selected unit at each point, applying Hidden for Infantry/Beasts/Swarm, so you can find safe positions.
+- Raw line-of-sight shading is still available, optionally clipped to maximum range.
 - For the selected unit, a **targets and threats table** lists every enemy unit with:
   - closest base-to-base distance
   - models visible
@@ -78,6 +80,7 @@ js/layouts-official.js   45 Event Companion v1.2 layouts (generated)
 js/bases-guide.js        Base Size Guide, June 2026 (generated)
 js/app.js                state, rendering, interaction, analysis, panels
 tools/                   scripts that generate the two data files from the Event Companion PDF
+tests/                   node tests/geometry.test.js
 ```
 
 Unofficial fan tool, not affiliated with or endorsed by Games Workshop. Warhammer 40,000 and related names are trademarks of Games Workshop Ltd.

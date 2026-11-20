@@ -147,7 +147,8 @@
     return inside;
   };
   G.polyArea = function (poly) {
-    var a = 0; for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) a += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1]);
+    // Shoelace formula: positive when the vertices run anticlockwise in maths (y-up) orientation
+    var a = 0; for (var i = 0; i < poly.length; i++) { var p = poly[i], q = poly[(i + 1) % poly.length]; a += p[0] * q[1] - q[0] * p[1]; }
     return a / 2;
   };
   // Cyrus–Beck clip of P0 + t(P1-P0) against a convex polygon. Returns [tIn, tOut] or null.

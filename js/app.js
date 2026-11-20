@@ -28,7 +28,7 @@
         labels: true, grid: true, features: true, zones: true, areaLabels: false, snap: true, lockLayout: true,
         threat: { move: false, advance: false, shoot: true, charge: true, engage: false },
         threatScope: 'selected', threatBasis: 'move', stack: false,
-        los: true, vis: false, visClip: false, cover: true
+        los: true, vis: false, visClip: false, cover: true, overlay: 'lanes', laneBasis: 'now'
       }
     };
   }
@@ -334,6 +334,7 @@
     });
     // visibility shading
     var su = selUnit();
+    if (su && S.view.overlay && S.view.overlay !== 'none' && !UI.drag && onBoard(su)) out.push(drawOverlay(su));
     if (su && S.view.vis && !UI.drag) out.push(drawVisibility(su));
     // threat rings
     out.push(drawThreats(su));
@@ -429,14 +430,16 @@
       if (v.threatScope === 'A' || v.threatScope === 'B') return u.player === v.threatScope;
       return su && su.id === u.id;
     });
+    var ovOn = su && v.overlay && v.overlay !== 'none' && onBoard(su);
     list.forEach(function (u) {
       var c = S.players[u.player].color, M = u.M || 0;
+      var fills = !(ovOn && su.id === u.id);
       var basis = v.threatBasis === 'move' ? M : 0;
-      if (v.threat.shoot) { var sd = shootThreat(u); out.push(threatRing(u, sd, c, 'shoot')); if (list.length < 6) out.push(threatOutline(u, sd, c, false)); }
+      if (v.threat.shoot) { var sd = shootThreat(u); if (fills) out.push(threatRing(u, sd, c, 'shoot')); if (list.length < 6 || !fills) out.push(threatOutline(u, sd, c, false)); }
       if (v.threat.charge) {
         var cd = basis + Math.min(chargeDist(), S.rules.maxChargeTargetDistance);
-        out.push(threatRing(u, cd, 'url(#hatch' + u.player + ')', 'charge'));
-        if (list.length < 6) out.push(threatOutline(u, cd, c, true));
+        if (fills) out.push(threatRing(u, cd, 'url(#hatch' + u.player + ')', 'charge'));
+        if (list.length < 6 || !fills) out.push(threatOutline(u, cd, c, true));
       }
       if (v.threat.advance && M) out.push(threatOutline(u, M + advDist(), '#fff', true));
       if (v.threat.move && M) out.push(threatRing(u, M, '#ffffff', 'move'));
@@ -468,6 +471,156 @@
     return '<g opacity="0.33" fill="' + c + '" pointer-events="none"' + clip + '>' + polys.map(function (p) { return '<polygon points="' + ptsAttr(p) + '"/>'; }).join('') + '</g>';
   }
 
+  // ---------------------------------------------------------------- tactical overlays
+  // Classifies every 0.5" cell of the battlefield, applying 11th edition Obscuring (13.10), Hidden (13.09)
+  // and Benefit of Cover (13.08), and paints the result as one image under the units.
+  var CELL = 0.5;
+  function cellGrid() {
+    if (UI.cache.cellGrid) return UI.cache.cellGrid;
+    var A = areas(), nx = Math.ceil(S.board.w / CELL), ny = Math.ceil(S.board.h / CELL);
+    var areaOf = new Array(nx * ny).fill(null);
+    var boxes = [];
+    Object.keys(A).forEach(function (k) { A[k].polys.forEach(function (P) { boxes.push({ id: A[k].id, P: P, b: G.bbox(P) }); }); });
+    for (var j = 0; j < ny; j++) for (var i = 0; i < nx; i++) {
+      var p = [(i + 0.5) * CELL, (j + 0.5) * CELL];
+      for (var q = 0; q < boxes.length; q++) {
+        var B = boxes[q];
+        if (p[0] < B.b.minX || p[0] > B.b.maxX || p[1] < B.b.minY || p[1] > B.b.maxY) continue;
+        if (G.pointInPoly(p, B.P)) { areaOf[j * nx + i] = B.id; break; }
+      }
+    }
+    UI.cache.cellGrid = { nx: nx, ny: ny, areaOf: areaOf };
+    return UI.cache.cellGrid;
+  }
+  function sampleModels(u, n) {
+    if (u.models.length <= n) return u.models.map(function (m, i) { return i; });
+    var out = [], step = (u.models.length - 1) / (n - 1);
+    for (var k = 0; k < n; k++) out.push(Math.round(k * step));
+    return out;
+  }
+  // Obstacle lists per (shooter model areas + target cell area), memoised
+  function obsFor(shooterAreas, cellArea, memo) {
+    var key = shooterAreas.join(',') + '|' + cellArea;
+    if (!memo[key]) memo[key] = obstaclePolys(cellArea != null ? shooterAreas.concat([cellArea]) : shooterAreas);
+    return memo[key];
+  }
+  function pointSeenBy(from, fromAreas, p, cellArea, memo) {
+    return !G.segmentBlocked(from, p, obsFor(fromAreas, cellArea, memo));
+  }
+  var OFFS = [[0.65, 0], [-0.65, 0], [0, 0.65], [0, -0.65]];
+  // Firing lanes for unit u: where could it shoot a target, and what would the target get?
+  function computeLanes(u) {
+    var key = 'lanes_' + u.id + '_' + S.view.laneBasis;
+    if (UI.cache[key]) return UI.cache[key];
+    var g = cellGrid(), A = areas(), info = modelInfo(u), memo = {};
+    var idx = sampleModels(u, 8);
+    var range = maxRange(u), det = +S.rules.hiddenDetection;
+    var moveBonus = S.view.laneBasis === 'move' ? (u.M || 0) : 0;
+    var res = new Uint8Array(g.nx * g.ny); // 0 out of range, 1 blocked, 2 clear, 3 cover, 4 hidden
+    var r0 = G.mm(u.base.w) / 2;
+    for (var j = 0; j < g.ny; j++) for (var i = 0; i < g.nx; i++) {
+      var p = [(i + 0.5) * CELL, (j + 0.5) * CELL], c = j * g.nx + i, ca = g.areaOf[c];
+      var dmin = Infinity;
+      idx.forEach(function (mi) { var m = u.models[mi]; var d = Math.hypot(p[0] - m.x, p[1] - m.y) - r0; if (d < dmin) dmin = d; });
+      if (range <= 0 || dmin > range + moveBonus) { res[c] = 0; continue; }
+      var seen = false, seenFrom = null;
+      for (var k = 0; k < idx.length && !seen; k++) {
+        var m = u.models[idx[k]];
+        if (pointSeenBy([m.x, m.y], info[idx[k]].areas, p, ca, memo)) { seen = true; seenFrom = k; }
+      }
+      if (!seen) { res[c] = 1; continue; }
+      if (ca != null && A[ca] && A[ca].dense && dmin - moveBonus > det) { res[c] = 4; continue; }
+      if (ca != null) { res[c] = 3; continue; }
+      // partly obscured? check a model-base-sized neighbourhood
+      var partial = false;
+      for (var o = 0; o < OFFS.length && !partial; o++) {
+        var q = [p[0] + OFFS[o][0], p[1] + OFFS[o][1]];
+        var qa = null;
+        var any = false;
+        for (var k2 = 0; k2 < idx.length && !any; k2++) {
+          var m2 = u.models[idx[k2]];
+          if (pointSeenBy([m2.x, m2.y], info[idx[k2]].areas, q, qa, memo)) any = true;
+        }
+        if (!any) partial = true;
+      }
+      res[c] = partial ? 3 : 2;
+    }
+    UI.cache[key] = res;
+    return res;
+  }
+  // Danger map for unit u: how many enemy units could shoot it at each point (from their current
+  // positions; with "next turn" they may also move first). Applies Hidden to u's type.
+  function computeDanger(u) {
+    var key = 'danger_' + u.id + '_' + S.view.laneBasis;
+    if (UI.cache[key]) return UI.cache[key];
+    var g = cellGrid(), A = areas(), memo = {}, det = +S.rules.hiddenDetection;
+    var foes = S.units.filter(function (f) { return f.player !== u.player && onBoard(f) && maxRange(f) > 0; });
+    var res = new Uint8Array(g.nx * g.ny), cov = new Uint8Array(g.nx * g.ny);
+    var canHide = !!u.infantry;
+    foes.forEach(function (f) {
+      var info = modelInfo(f), idx = sampleModels(f, 5), r0 = G.mm(f.base.w) / 2;
+      var mv = S.view.laneBasis === 'move' ? (f.M || 0) : 0;
+      var reach = maxRange(f) + mv + (S.view.laneBasis === 'move' && rangedWeapons(f).some(function (w) { return w.assault; }) ? advDist() : 0);
+      for (var j = 0; j < g.ny; j++) for (var i = 0; i < g.nx; i++) {
+        var p = [(i + 0.5) * CELL, (j + 0.5) * CELL], c = j * g.nx + i, ca = g.areaOf[c];
+        var dmin = Infinity;
+        idx.forEach(function (mi) { var m = f.models[mi]; var d = Math.hypot(p[0] - m.x, p[1] - m.y) - r0; if (d < dmin) dmin = d; });
+        if (dmin > reach) continue;
+        if (canHide && ca != null && A[ca] && A[ca].dense && dmin - mv > det) continue; // hidden from this unit
+        var seen = false;
+        for (var k = 0; k < idx.length && !seen; k++) { var m = f.models[idx[k]]; if (pointSeenBy([m.x, m.y], info[idx[k]].areas, p, ca, memo)) seen = true; }
+        if (seen) { res[c]++; if (canHide && ca != null) cov[c] = 1; }
+      }
+    });
+    var out = { n: res, cover: cov, foes: foes.length };
+    UI.cache[key] = out;
+    return out;
+  }
+  function overlayImage(key, build) {
+    if (UI.cache[key]) return UI.cache[key];
+    var g = cellGrid();
+    var cv = document.createElement('canvas'); cv.width = g.nx; cv.height = g.ny;
+    var ctx = cv.getContext('2d'), img = ctx.createImageData(g.nx, g.ny);
+    for (var c = 0; c < g.nx * g.ny; c++) {
+      var col = build(c);
+      if (!col) continue;
+      img.data[c * 4] = col[0]; img.data[c * 4 + 1] = col[1]; img.data[c * 4 + 2] = col[2]; img.data[c * 4 + 3] = col[3];
+    }
+    ctx.putImageData(img, 0, 0);
+    UI.cache[key] = cv.toDataURL();
+    return UI.cache[key];
+  }
+  var LANE_COL = { 1: [18, 18, 26, 150], 2: [34, 197, 94, 120], 3: [245, 176, 40, 135], 4: [155, 92, 230, 130] };
+  var DANGER_COL = [[34, 197, 94, 105], [250, 204, 21, 120], [249, 115, 22, 135], [220, 38, 38, 145]];
+  function drawOverlay(u) {
+    var g = cellGrid(), href;
+    if (S.view.overlay === 'lanes') {
+      var L = computeLanes(u);
+      href = overlayImage('lanesImg_' + u.id + '_' + S.view.laneBasis, function (c) { return LANE_COL[L[c]] || null; });
+    } else if (S.view.overlay === 'danger') {
+      var D = computeDanger(u);
+      href = overlayImage('dangerImg_' + u.id + '_' + S.view.laneBasis, function (c) {
+        var n = D.n[c]; var col = DANGER_COL[Math.min(n, 3)].slice();
+        if (n && D.cover[c]) col[3] = Math.round(col[3] * 0.6);
+        return col;
+      });
+    } else return '';
+    return '<image href="' + href + '" x="0" y="0" width="' + g.nx * CELL + '" height="' + g.ny * CELL + '" preserveAspectRatio="none" pointer-events="none" style="image-rendering:auto"/>';
+  }
+  function legendHtml() {
+    var su = selUnit(), v = S.view;
+    if (!su || !onBoard(su) || !v.overlay || v.overlay === 'none') return '';
+    var sw = function (c) { return '<i style="background:rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (c[3] / 160) + ')"></i>'; };
+    var basis = v.laneBasis === 'move' ? 'after moving' : 'from where it stands';
+    if (v.overlay === 'lanes') {
+      return '<b>Firing lanes</b> — ' + esc(su.name) + ' ' + basis + ' (' + maxRange(su) + '" max)<br>' +
+        sw(LANE_COL[2]) + 'Clear shot ' + sw(LANE_COL[3]) + 'Target gets cover (−1 BS) ' + sw(LANE_COL[4]) + 'Target hidden (inf. in dense terrain, &gt;' + S.rules.hiddenDetection + '") ' + sw(LANE_COL[1]) + 'No line of sight';
+    }
+    var D = computeDanger(su);
+    return '<b>Danger map</b> — enemy units that could shoot ' + esc(su.name) + ' ' + (v.laneBasis === 'move' ? 'next turn' : 'right now') + ' (' + D.foes + ' shooting units)<br>' +
+      sw(DANGER_COL[0]) + 'Safe ' + sw(DANGER_COL[1]) + '1 ' + sw(DANGER_COL[2]) + '2 ' + sw(DANGER_COL[3]) + '3+' + (su.infantry ? ' · paler = it would have cover there' : '');
+  }
+
   function measureDist(me) {
     if (me.ua && me.ub) {
       var ua = unitById(me.ua.u), ub = unitById(me.ub.u);
@@ -481,6 +634,7 @@
   }
 
   function hud() {
+    var lg = $('#legend'); if (lg) { var lh = legendHtml(); lg.innerHTML = lh; lg.style.display = lh ? 'block' : 'none'; }
     var h = $('#hud'), parts = [];
     parts.push('<b>' + esc(S.layout.name) + '</b>');
     parts.push(S.board.w + '" × ' + S.board.h + '"');
@@ -702,6 +856,9 @@
       var rows = analyse(u);
       var info = modelInfo(u);
       var hiddenN = info.filter(function (x) { return x.hidden; }).length, inArea = info.filter(function (x) { return x.inArea; }).length;
+      h += '<h4>Board overlay</h4><div class="seg">' + [['lanes', 'Firing lanes'], ['danger', 'Danger map'], ['none', 'Off']].map(function (o) { return '<button type="button" data-act="setOverlay" data-v="' + o[0] + '" class="' + (S.view.overlay === o[0] ? 'on' : '') + '">' + o[1] + '</button>'; }).join('') + '</div>' +
+        '<div class="seg">' + [['now', 'From current position'], ['move', 'After moving']].map(function (o) { return '<button type="button" data-act="setLaneBasis" data-v="' + o[0] + '" class="' + (S.view.laneBasis === o[0] ? 'on' : '') + '">' + o[1] + '</button>'; }).join('') + '</div>' +
+        '<p class="muted small">' + (S.view.overlay === 'danger' ? 'Where this unit would be exposed to enemy shooting. Green = no enemy unit can see and reach it. ' + (su_inf(u) ? 'As Infantry it can be hidden inside dense terrain more than ' + S.rules.hiddenDetection + '" from the shooter.' : 'Not Infantry/Beasts/Swarm, so it can\'t use Hidden.') : 'Where this unit could shoot, coloured by what a target standing there would get. Cover/hidden apply to Infantry, Beasts and Swarm targets in terrain; amber outside terrain means the target is partly obscured.') + '</p>';
       h += '<h4>Status</h4><p class="small">' + inArea + '/' + u.models.length + ' models within a terrain area' + (u.infantry ? (inArea === u.models.length ? ' → <b>benefit of cover</b>' : '') : '') +
         (hiddenN ? ' · <b>' + hiddenN + ' hidden</b> (visible only within ' + S.rules.hiddenDetection + '")' : '') + '</p>';
       if (rows.length) {
@@ -751,6 +908,7 @@
       set('tX', t.x); set('tY', t.y); set('tL', bb.minX); set('tR', S.board.w - bb.maxX); set('tT', bb.minY); set('tB', S.board.h - bb.maxY);
     }
   }
+  function su_inf(u) { return !!u.infantry; }
   function lockNote() { return S.view.lockLayout ? '<p class="small lockbar">Layout is locked, so this can\'t be dragged. Unlock it in the <b>Layout</b> tab to move pieces (the fields below still edit it exactly).</p>' : ''; }
   function panelObj(el, o) {
     var h = '<h3>Objective</h3>' + lockNote() + '<div class="grid2"><label>Type<select data-act="oKind">' +
@@ -823,7 +981,9 @@
       [['selected', 'Selected unit'], ['A', S.players.A.name], ['B', S.players.B.name], ['all', 'Everyone']].map(function (o) { return '<option value="' + o[0] + '"' + (v.threatScope === o[0] ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select></label>' +
       '<label>Measure rings<select data-act="viewSel" data-path="threatBasis"><option value="move"' + (v.threatBasis === 'move' ? ' selected' : '') + '>Next turn (move + range)</option><option value="now"' + (v.threatBasis === 'now' ? ' selected' : '') + '>From current position</option></select></label></div>';
     h += '<div class="row wrap">' + chk('stack', 'Stack overlaps (heat map)', 'Overlapping rings darken where more units threaten') + '</div>';
-    h += '<h4>Line of sight</h4><div class="row wrap">' + chk('los', 'LOS lines to visible enemies') + chk('vis', 'Shade what the selected unit can see') + chk('visClip', 'Clip shading to max range') + chk('cover', 'Cover / hidden badges') + '</div>';
+    h += '<h4>Board overlay (selected unit)</h4><div class="grid2"><label>Overlay<select data-act="viewSel" data-path="overlay">' + [['lanes', 'Firing lanes'], ['danger', 'Danger map'], ['none', 'Off']].map(function (o) { return '<option value="' + o[0] + '"' + (v.overlay === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
+      '<label>Basis<select data-act="viewSel" data-path="laneBasis"><option value="now"' + (v.laneBasis === 'now' ? ' selected' : '') + '>Current positions</option><option value="move"' + (v.laneBasis === 'move' ? ' selected' : '') + '>After moving</option></select></label></div>';
+    h += '<h4>Line of sight</h4><div class="row wrap">' + chk('los', 'LOS lines to visible enemies') + chk('vis', 'Raw line-of-sight shading') + chk('visClip', 'Clip shading to max range') + chk('cover', 'Cover / hidden badges') + '</div>';
     h += '<p class="muted small">Terrain shading: <b style="color:#77736a">dark</b> = area with dense features (Hidden possible), <b style="color:#a8a396">mid</b> = light features only (obscuring), <b style="color:#c9c5b7">pale</b> = not obscuring. Teal outline = terrain objective.</p>';
     h += '<h4>Display</h4><div class="row wrap">' + chk('labels', 'Unit labels') + chk('grid', 'Grid') + chk('zones', 'Deployment zones') + chk('areaLabels', 'Terrain area numbers') + chk('snap', 'Snap terrain to ¼"') + '</div>';
     h += '<h4>Rules values (11th edition)</h4><div class="grid2">' +
@@ -1131,6 +1291,8 @@
       });
     },
     exportPng: function () { exportPng(); },
+    setOverlay: function (el) { S.view.overlay = el.dataset.v; commit(); renderPanel(); render(); },
+    setLaneBasis: function (el) { S.view.laneBasis = el.dataset.v; commit(); renderPanel(); render(); },
     copyScenario: function () {
       try { navigator.clipboard.writeText(JSON.stringify(S)).then(function () { toast('Scenario copied — paste it into a .json file to keep it'); }, function () { toast('Clipboard blocked by this browser'); }); }
       catch (e) { toast('Clipboard blocked by this browser'); }
@@ -1228,6 +1390,6 @@
     placeUnit(b, 30, 46); S.units.push(b);
     UI.cache = {}; commit();
   }
-  TT.app = { state: function () { return S; }, ui: UI, actions: ACTIONS, analyse: analyse, visibility: visibility, lookupBase: lookupBase, select: select, loadLayout: loadLayout, fit: fit, importUnits: importUnits };
+  TT.app = { computeLanes: computeLanes, computeDanger: computeDanger, state: function () { return S; }, ui: UI, actions: ACTIONS, analyse: analyse, visibility: visibility, lookupBase: lookupBase, select: select, loadLayout: loadLayout, fit: fit, importUnits: importUnits };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })(window.TT = window.TT || {});
