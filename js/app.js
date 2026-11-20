@@ -36,6 +36,9 @@
   if (!S || S.v !== 2) S = defaultState();
   S.view = Object.assign(defaultState().view, S.view || {});
   S.rules = Object.assign(clone(TT.DEFAULT_RULES), S.rules || {});
+  var APP_VERSION = '2026.11.20-4';
+  // On first run of a new version, re-lock the layout so terrain and zones can't be dragged by accident
+  if (S.appv !== APP_VERSION) { S.view.lockLayout = true; S.appv = APP_VERSION; }
   var BASELIB = LS.get('tt.baseLib', {});
   var MYLAYOUTS = LS.get('tt.layouts', []);
 
@@ -636,6 +639,7 @@
   function hud() {
     var lg = $('#legend'); if (lg) { var lh = legendHtml(); lg.innerHTML = lh; lg.style.display = lh ? 'block' : 'none'; }
     var h = $('#hud'), parts = [];
+    parts.push(S.view.lockLayout ? '🔒 Layout locked' : '<span style="color:#ffb347">🔓 Layout unlocked — terrain &amp; zones can be dragged</span>');
     parts.push('<b>' + esc(S.layout.name) + '</b>');
     parts.push(S.board.w + '" × ' + S.board.h + '"');
     if (UI.tool === 'measure') parts.push('Measure: drag on the board (start on a model for edge-to-edge)');
@@ -1003,7 +1007,7 @@
       '<p class="muted small">Everything autosaves in this browser. Scenario files hold the layout, both armies and their positions — handy for planning deployments before a game.</p>';
     h += '<h4>Base library</h4><p class="muted small">Bases you set with “Remember base” are used next time a unit with that name is imported. The built-in Base Size Guide (June 2026, ' + guideIndex().length + ' entries) is used otherwise.</p>' +
       '<ul class="ulist">' + Object.keys(BASELIB).map(function (k) { return '<li><span class="grow">' + esc(k) + ' <span class="muted">' + esc(baseLabel(BASELIB[k])) + '</span></span><button type="button" class="x" data-act="libDel" data-k="' + esc(k) + '">✕</button></li>'; }).join('') + '</ul>';
-    h += '<h4>About</h4><p class="small">TacticalTooling — an 11th edition Warhammer 40,000 tactics board. Terrain layouts and base sizes transcribed from the Warhammer Event Companion v1.2; rules values from the 11th edition Core Rules. Unofficial fan tool, not affiliated with Games Workshop.</p>';
+    h += '<h4>About</h4><p class="small">TacticalTooling — an 11th edition Warhammer 40,000 tactics board. Terrain layouts and base sizes transcribed from the Warhammer Event Companion v1.2; rules values from the 11th edition Core Rules. Unofficial fan tool, not affiliated with Games Workshop.</p><p class="muted small">Version ' + APP_VERSION + '</p>';
     el.innerHTML = h; bind(el);
   }
 
