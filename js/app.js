@@ -36,9 +36,10 @@
   if (!S || S.v !== 2) S = defaultState();
   S.view = Object.assign(defaultState().view, S.view || {});
   S.rules = Object.assign(clone(TT.DEFAULT_RULES), S.rules || {});
-  var APP_VERSION = '2026.11.20-4';
+  var APP_VERSION = '2026.11.20-5';
   // On first run of a new version, re-lock the layout so terrain and zones can't be dragged by accident
-  if (S.appv !== APP_VERSION) { S.view.lockLayout = true; S.appv = APP_VERSION; }
+  var upgraded = S.appv !== APP_VERSION;
+  if (upgraded) { S.view.lockLayout = true; S.appv = APP_VERSION; }
   var BASELIB = LS.get('tt.baseLib', {});
   var MYLAYOUTS = LS.get('tt.layouts', []);
 
@@ -768,6 +769,7 @@
     if (dr.kind === 'measure') { render(); return; }
     if (dr.moved) {
       if (dr.kind === 'obj') { var o = objById(dr.id); o.area = areaAt([o.x, o.y]); }
+      if (dr.kind !== 'unit') markEdited();
       UI.cache = {};
       commit(); renderPanel();
     }
@@ -957,8 +959,8 @@
       (TT.OFFICIAL_LAYOUTS || []).map(function (l) { return '<option value="off:' + l.id + '"' + (S.layout.id === l.id ? ' selected' : '') + '>' + esc(l.name) + '</option>'; }).join('') + '</optgroup>';
     if (MYLAYOUTS.length) opts += '<optgroup label="My layouts">' + MYLAYOUTS.map(function (l, i) { return '<option value="my:' + i + '">' + esc(l.name) + '</option>'; }).join('') + '</optgroup>';
     h += '<div class="lockbar">' + chk('lockLayout', '<b>Lock layout</b> — terrain, objectives and deployment zones can\'t be moved') + '</div>';
-    h += '<h4>Layout library</h4><select id="layoutSel" class="full">' + opts + '</select><div class="row wrap"><button type="button" data-act="loadLayout">Load layout</button><button type="button" data-act="rotateBoard">Rotate battlefield 90°</button></div>';
-    var cur = (TT.OFFICIAL_LAYOUTS || []).find(function (l) { return l.id === S.layout.id; });
+    h += '<h4>Layout library</h4><select id="layoutSel" class="full">' + opts + '</select><div class="row wrap"><button type="button" data-act="loadLayout">Load layout</button><button type="button" data-act="rotateBoard">Rotate battlefield 90°</button>' + ((officialById(S.layout.id) || officialById(S.layout.from)) ? '<button type="button" data-act="resetLayout">Reset to official</button>' : '') + '</div>';
+    var cur = officialById(S.layout.id) || officialById(S.layout.from);
     if (cur) h += '<p class="small">' + esc(cur.dispositions[0]) + ' (' + esc(cur.missions[0]) + ') vs ' + esc(cur.dispositions[1]) + ' (' + esc(cur.missions[1]) + ') · Event Companion p.' + cur.page + '</p>';
     h += '<h4>Terrain footprints</h4><div class="palette">' + TT.FOOTPRINT_ORDER.map(function (k) {
       var f = TT.FOOTPRINTS[k], used = S.terrain.filter(function (t) { return t.type === k; }).length;
@@ -1070,6 +1072,20 @@
     S.objectives.forEach(function (o) { if (o.area == null) o.area = areaAt([o.x, o.y]); });
     commit(); renderAll(); fit();
   }
+  function officialById(id) { return (TT.OFFICIAL_LAYOUTS || []).find(function (l) { return l.id === id; }); }
+  // Restore the current official layout's terrain, zones and objectives; armies stay where they are
+  function resetLayout(quiet) {
+    var L = officialById(S.layout.id) || officialById(S.layout.from);
+    if (!L) { toast('This layout isn\'t an official one — load it again from the library'); return; }
+    var units = S.units, view = S.view;
+    loadLayout(L, true);
+    S.units = units; S.view = view; UI.cache = {}; commit(); renderAll();
+    if (!quiet) toast('Layout reset to the Event Companion version');
+  }
+  // Editing an official layout turns it into your own copy, so it's never mistaken for the published one
+  function markEdited() {
+    if (officialById(S.layout.id)) S.layout = { id: 'custom-' + uid(), from: S.layout.id, name: S.layout.name + ' (edited)' };
+  }
   function applyZonePreset(id) {
     var p = TT.ZONE_PRESETS.find(function (z) { return z.id === id; }); if (!p) return;
     S.zones = p.make(S.board.w, S.board.h).map(function (z) { return { id: uid(), player: z.player, points: z.points }; });
@@ -1128,7 +1144,7 @@
 
   // ---------------------------------------------------------------- actions
   function withUnit(fn) { var u = selUnit(); if (u) { fn(u); UI.cache = {}; commit(); renderPanel(); render(); } }
-  function withTerr(fn) { var t = UI.sel && terrById(UI.sel.id); if (t) { fn(t); UI.cache = {}; commit(); renderPanel(); render(); } }
+  function withTerr(fn) { var t = UI.sel && terrById(UI.sel.id); if (t) { fn(t); markEdited(); UI.cache = {}; commit(); renderPanel(); render(); } }
   function moveTerrBy(t, dx, dy) { t.x += dx; t.y += dy; }
   function reform(u, rows) {
     var c = G.unitCentre(u), n = u.models.length;
@@ -1186,21 +1202,21 @@
     tObs: function (el) { withTerr(function (t) { t.obscuring = el.checked; }); },
     tDense: function (el) { withTerr(function (t) { t.dense = el.checked; }); },
     tArea: function (el) { withTerr(function (t) { t.area = Math.max(1, parseInt(el.value, 10) || t.area); }); },
-    tDup: function () { var t = UI.sel && terrById(UI.sel.id); if (!t) return; var c = clone(t); c.id = uid(); c.x += 2; c.y += 2; c.area = nextAreaId(); S.terrain.push(c); UI.cache = {}; commit(); select('terrain', c.id); },
-    tDel: function () { var t = UI.sel && terrById(UI.sel.id); if (!t) return; S.terrain = S.terrain.filter(function (x) { return x !== t; }); S.objectives.forEach(function (o) { o.area = areaAt([o.x, o.y]); }); UI.sel = null; UI.cache = {}; commit(); renderAll(); },
+    tDup: function () { var t = UI.sel && terrById(UI.sel.id); if (!t) return; var c = clone(t); c.id = uid(); c.x += 2; c.y += 2; c.area = nextAreaId(); S.terrain.push(c); UI.cache = {}; markEdited(); commit(); select('terrain', c.id); },
+    tDel: function () { var t = UI.sel && terrById(UI.sel.id); if (!t) return; S.terrain = S.terrain.filter(function (x) { return x !== t; }); S.objectives.forEach(function (o) { o.area = areaAt([o.x, o.y]); }); UI.sel = null; UI.cache = {}; markEdited(); commit(); renderAll(); },
 
-    oKind: function (el) { var o = UI.sel && objById(UI.sel.id); if (o) { o.kind = el.value; commit(); render(); } },
+    oKind: function (el) { var o = UI.sel && objById(UI.sel.id); if (o) { o.kind = el.value; markEdited(); commit(); render(); } },
     oLabel: function (el) { var o = UI.sel && objById(UI.sel.id); if (o) { o.label = el.value; commit(); } },
-    oX: function (el) { var o = UI.sel && objById(UI.sel.id); if (o) { o.x = num(el.value, o.x); o.area = areaAt([o.x, o.y]); commit(); renderPanel(); render(); } },
-    oY: function (el) { var o = UI.sel && objById(UI.sel.id); if (o) { o.y = num(el.value, o.y); o.area = areaAt([o.x, o.y]); commit(); renderPanel(); render(); } },
-    oDel: function () { var o = UI.sel && objById(UI.sel.id); if (!o) return; S.objectives = S.objectives.filter(function (x) { return x !== o; }); UI.sel = null; commit(); renderAll(); },
-    zPlayer: function (el) { var z = UI.sel && zoneById(UI.sel.id); if (z) { z.player = el.value; commit(); render(); } },
+    oX: function (el) { var o = UI.sel && objById(UI.sel.id); if (o) { o.x = num(el.value, o.x); o.area = areaAt([o.x, o.y]); markEdited(); commit(); renderPanel(); render(); } },
+    oY: function (el) { var o = UI.sel && objById(UI.sel.id); if (o) { o.y = num(el.value, o.y); o.area = areaAt([o.x, o.y]); markEdited(); commit(); renderPanel(); render(); } },
+    oDel: function () { var o = UI.sel && objById(UI.sel.id); if (!o) return; S.objectives = S.objectives.filter(function (x) { return x !== o; }); UI.sel = null; markEdited(); commit(); renderAll(); },
+    zPlayer: function (el) { var z = UI.sel && zoneById(UI.sel.id); if (z) { z.player = el.value; markEdited(); commit(); render(); } },
     zPts: function (el) {
       var z = UI.sel && zoneById(UI.sel.id); if (!z) return;
       var pts = el.value.split(/\n+/).map(function (l) { var m = l.split(/[,\s]+/).map(parseFloat); return m.length >= 2 && !isNaN(m[0]) && !isNaN(m[1]) ? [m[0], m[1]] : null; }).filter(Boolean);
-      if (pts.length >= 3) { z.points = pts; commit(); render(); } else toast('A zone needs at least 3 points');
+      if (pts.length >= 3) { z.points = pts; markEdited(); commit(); render(); } else toast('A zone needs at least 3 points');
     },
-    zDel: function () { var z = UI.sel && zoneById(UI.sel.id); if (!z) return; S.zones = S.zones.filter(function (x) { return x !== z; }); UI.sel = null; commit(); renderAll(); },
+    zDel: function () { var z = UI.sel && zoneById(UI.sel.id); if (!z) return; S.zones = S.zones.filter(function (x) { return x !== z; }); UI.sel = null; markEdited(); commit(); renderAll(); },
 
     pName: function (el) { S.players[el.dataset.p].name = el.value; commit(); renderPanel(); hud(); },
     pColor: function (el) { S.players[el.dataset.p].color = el.value; commit(); render(); },
@@ -1247,20 +1263,21 @@
       if (v.indexOf('my:') === 0) { var M = MYLAYOUTS[+v.slice(3)]; if (M) loadLayout(M); }
     },
     rotateBoard: function () { rotateBoard(); },
+    resetLayout: function () { resetLayout(false); },
     addFoot: function (el) {
       unlockForEdit();
       var k = el.dataset.t, r = svg.getBoundingClientRect();
       var c = screenToWorld(r.left + r.width / 2, r.top + r.height / 2);
       var t = { id: uid(), type: k, x: snapv(Math.min(Math.max(c[0], 6), S.board.w - 6)), y: snapv(Math.min(Math.max(c[1], 6), S.board.h - 6)), rot: 0, mirror: false, area: nextAreaId(), dense: true, obscuring: TT.FOOTPRINTS[k].obscuring };
-      S.terrain.push(t); UI.cache = {}; commit(); select('terrain', t.id);
+      S.terrain.push(t); UI.cache = {}; markEdited(); commit(); select('terrain', t.id);
     },
     addObj: function (el) {
       unlockForEdit();
       var o = { id: uid(), kind: el.dataset.k, x: S.board.w / 2, y: S.board.h / 2, area: null, label: '' };
-      o.area = areaAt([o.x, o.y]); S.objectives.push(o); commit(); select('obj', o.id);
+      o.area = areaAt([o.x, o.y]); S.objectives.push(o); markEdited(); commit(); select('obj', o.id);
     },
-    applyZones: function () { applyZonePreset($('#zonePreset').value); commit(); render(); },
-    addZone: function () { unlockForEdit(); var z = { id: uid(), player: 'A', points: [[0, 0], [S.board.w, 0], [S.board.w, 12], [0, 12]] }; S.zones.push(z); commit(); select('zone', z.id); },
+    applyZones: function () { applyZonePreset($('#zonePreset').value); markEdited(); commit(); render(); },
+    addZone: function () { unlockForEdit(); var z = { id: uid(), player: 'A', points: [[0, 0], [S.board.w, 0], [S.board.w, 12], [0, 12]] }; S.zones.push(z); markEdited(); commit(); select('zone', z.id); },
     applyBoard: function () { var b = TT.BOARD_PRESETS.find(function (x) { return x.id === $('#boardPreset').value; }); if (b) { S.board = { w: b.w, h: b.h }; commit(); renderAll(); fit(); } },
     boardW: function (el) { S.board.w = Math.max(10, num(el.value, 44)); commit(); render(); fit(); },
     boardH: function (el) { S.board.h = Math.max(10, num(el.value, 60)); commit(); render(); fit(); },
@@ -1378,6 +1395,8 @@
     $('#btnUndo').addEventListener('click', doUndo);
     $('#btnRedo').addEventListener('click', doRedo);
     $('#btnPanel').addEventListener('click', function () { document.body.classList.toggle('panel-open'); });
+    // after an update, put an official layout back exactly as published (earlier versions let it be dragged)
+    if (upgraded && officialById(S.layout.id)) resetLayout(true);
     // first run: load the first official layout so there's something to look at
     if (!S.terrain.length && !S.units.length && TT.OFFICIAL_LAYOUTS && TT.OFFICIAL_LAYOUTS.length && !LS.get('tt.seen', false)) {
       LS.set('tt.seen', true);
