@@ -81,3 +81,7 @@ h4 { margin: 16px 0 6px; font-size: 12px; text-transform: uppercase; letter-spac
   .tools button { padding: 5px 8px; }
   #hud { bottom: 48px; }
 }
+
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 20; }
+.modal .box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; width: min(420px, 92vw); }
+.modal p { margin: 0 0 10px; }

@@ -836,7 +836,7 @@
 
   function panelFile() {
     var el = $('#tab-file');
-    var h = '<h4>Scenario</h4><div class="row wrap"><button type="button" data-act="saveScenario">Save scenario (.json)</button><button type="button" data-act="loadScenario">Load scenario…</button><button type="button" data-act="exportPng">Export PNG</button><button type="button" class="danger" data-act="newScenario">New scenario</button></div>' +
+    var h = '<h4>Scenario</h4><div class="row wrap"><button type="button" data-act="saveScenario">Save scenario (.json)</button><button type="button" data-act="loadScenario">Load scenario…</button><button type="button" data-act="copyScenario">Copy as text</button><button type="button" data-act="exportPng">Export PNG</button><button type="button" class="danger" data-act="newScenario">New scenario</button></div>' +
       '<p class="muted small">Everything autosaves in this browser. Scenario files hold the layout, both armies and their positions — handy for planning deployments before a game.</p>';
     h += '<h4>Base library</h4><p class="muted small">Bases you set with “Remember base” are used next time a unit with that name is imported. The built-in Base Size Guide (June 2026, ' + guideIndex().length + ' entries) is used otherwise.</p>' +
       '<ul class="ulist">' + Object.keys(BASELIB).map(function (k) { return '<li><span class="grow">' + esc(k) + ' <span class="muted">' + esc(baseLabel(BASELIB[k])) + '</span></span><button type="button" class="x" data-act="libDel" data-k="' + esc(k) + '">✕</button></li>'; }).join('') + '</ul>';
@@ -1071,7 +1071,7 @@
       });
       UI.cache = {}; commit(); renderAll(); fit();
     },
-    clearArmy: function (el) { if (!confirmAct('Remove all units for ' + S.players[el.dataset.p].name + '?')) return; S.units = S.units.filter(function (u) { return u.player !== el.dataset.p; }); UI.sel = null; UI.cache = {}; commit(); renderAll(); },
+    clearArmy: function (el) { var p = el.dataset.p; dialog('Remove all units for ' + S.players[p].name + '?', { ok: 'Remove' }).then(function (ok) { if (!ok) return; S.units = S.units.filter(function (u) { return u.player !== p; }); UI.sel = null; UI.cache = {}; commit(); renderAll(); }); },
 
     loadLayout: function () {
       var v = $('#layoutSel').value;
@@ -1096,8 +1096,10 @@
     boardW: function (el) { S.board.w = Math.max(10, num(el.value, 44)); commit(); render(); fit(); },
     boardH: function (el) { S.board.h = Math.max(10, num(el.value, 60)); commit(); render(); fit(); },
     saveLayout: function () {
-      var name = prompt('Name for this layout', S.layout.name + ' (mine)'); if (!name) return;
-      var L = layoutJSON(); L.name = name; L.id = 'my-' + uid(); MYLAYOUTS.push(L); LS.set('tt.layouts', MYLAYOUTS); S.layout = { id: L.id, name: name }; commit(); renderPanel(); toast('Saved “' + name + '”');
+      dialog('Name for this layout', { input: S.layout.name + ' (mine)', ok: 'Save' }).then(function (name) {
+        if (!name) return;
+        var L = layoutJSON(); L.name = name; L.id = 'my-' + uid(); MYLAYOUTS.push(L); LS.set('tt.layouts', MYLAYOUTS); S.layout = { id: L.id, name: name }; commit(); renderPanel(); toast('Saved “' + name + '”');
+      });
     },
     delMyLayout: function () {
       var v = $('#layoutSel').value; if (v.indexOf('my:') !== 0) { toast('Select one of “My layouts” first'); return; }
@@ -1107,7 +1109,7 @@
     importLayout: function () {
       pickFile('.json', function (f) { f.text().then(function (t) { try { var L = JSON.parse(t); loadLayout(L); } catch (e) { toast('Not a layout file'); } }); });
     },
-    clearTerrain: function () { if (!confirmAct('Remove all terrain, objectives and zones?')) return; S.terrain = []; S.objectives = []; S.features = []; S.zones = []; S.layout = { id: 'custom', name: 'Custom layout' }; UI.sel = null; UI.cache = {}; commit(); renderAll(); },
+    clearTerrain: function () { dialog('Remove all terrain, objectives and zones?', { ok: 'Remove' }).then(function (ok) { if (!ok) return; S.terrain = []; S.objectives = []; S.features = []; S.zones = []; S.layout = { id: 'custom', name: 'Custom layout' }; UI.sel = null; UI.cache = {}; commit(); renderAll(); }); },
 
     viewChk: function (el) { var path = el.dataset.path.split('.'), o = S.view; while (path.length > 1) o = o[path.shift()]; o[path[0]] = el.checked; commit(); render(); },
     viewSel: function (el) { S.view[el.dataset.path] = el.value; commit(); render(); },
@@ -1124,10 +1126,27 @@
       });
     },
     exportPng: function () { exportPng(); },
-    newScenario: function () { if (!confirmAct('Start a new scenario? (current one is replaced)')) return; S = defaultState(); UI.sel = null; UI.cache = {}; commit(); renderAll(); fit(); },
+    copyScenario: function () {
+      try { navigator.clipboard.writeText(JSON.stringify(S)).then(function () { toast('Scenario copied — paste it into a .json file to keep it'); }, function () { toast('Clipboard blocked by this browser'); }); }
+      catch (e) { toast('Clipboard blocked by this browser'); }
+    },
+    newScenario: function () { dialog('Start a new scenario? The current one is replaced (you can undo).', { ok: 'Start new' }).then(function (ok) { if (!ok) return; S = defaultState(); UI.sel = null; UI.cache = {}; commit(); renderAll(); fit(); }); },
     libDel: function (el) { delete BASELIB[el.dataset.k]; LS.set('tt.baseLib', BASELIB); renderPanel(); }
   };
-  function confirmAct(msg) { try { return window.confirm(msg); } catch (e) { return true; } }
+  // In-page dialog (browser confirm/prompt are blocked in some embedded viewers)
+  function dialog(msg, opts) {
+    opts = opts || {};
+    return new Promise(function (resolve) {
+      var d = document.createElement('div'); d.className = 'modal';
+      d.innerHTML = '<div class="box"><p>' + esc(msg) + '</p>' + (opts.input != null ? '<input class="full" value="' + esc(opts.input) + '">' : '') +
+        '<div class="row"><span class="grow"></span><button type="button" data-r="0">Cancel</button><button type="button" class="on" data-r="1">' + esc(opts.ok || 'OK') + '</button></div></div>';
+      document.body.appendChild(d);
+      var inp = d.querySelector('input'); if (inp) { inp.focus(); inp.select(); }
+      var done = function (ok) { var v = inp ? inp.value : true; d.remove(); resolve(ok ? v : null); };
+      d.addEventListener('click', function (e) { var r = e.target.getAttribute('data-r'); if (r != null) done(r === '1'); else if (e.target === d) done(false); });
+      d.addEventListener('keydown', function (e) { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
+    });
+  }
 
   // ---------------------------------------------------------------- misc UI
   var toastT;
